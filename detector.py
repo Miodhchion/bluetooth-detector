@@ -12,62 +12,96 @@
 
 
 import RPi.GPIO as GPIO
-import configparser
-import bluetooth as bt
+import ConfigParser
+import bluetooth
+import bluetooth._bluetooth as bt
+import random
+import time
+import struct
+import array
+import fcntl
 
-global outpins
-global pwm
-global target_addr 
-global maxactivation
-global minrssi
-global maxrssi
-global mode
+outpins = [15, 17, 18]
+onstates = [0, 0, 0]
+pwm = []
+target_addr = '00:00:00:00:00:00'
+maxActivation = 10
+minrssi = -100
+maxrssi = 25
+mode = 0
+count = 0
 
 def init (): #Initialize I/O hardware and random number generator
+	global outpins
+	global onstates
+	global pwm
+	global target_addr
+	global minrssi
+	global maxrssi
+	global mode
 	random.seed()
-	config = configparser.ConfigParser()
-	#Read pin and bluetooth settings from ini file
-	config.read('detector.ini')
-	gpioconfig = config['GPIO']
-	#Maximum level of activation, default is 10
-	maxactivation = int(gpioconfig.get('MaxActivation','10'))
-	#List of on/off output pins, default is 14 & 15
-	outpins = [int(x) for x in gpioconfig.get('OutputPins','14 15').split()]
-	#PWM pin, default is 21
-	pwmpin = int(gpioconfig.get('PwmPin','21'))
-	GPIO.setmode(GPIO.BCM)
-	if outpins:
-		GPIO.setup(outpins,GPIO.OUT,initial=GPIO.HIGH)
-	if pwm:
-		GPIO.setup(pwmpin,GPIO.OUT,initial=GPIO.HIGH)
-		pwm = GPIO.PWM(pwmpin, 100)
-		pwm.start(0) 
-	bluetooth = config['Bluetooth']
-	#Bluetooth MAC and allowed signal strength range
-	target_addr = bluetooth.get('Target','00:00:00:00:00:00')
-	minrssi = bluetooth.get('minRSSI','0')
-	maxrssi = bluetooth.get('maxRSSI','100')
-	settings = config['Settings']
-	mode = int(settings.get('Mode',0))
-	
+	config = ConfigParser.ConfigParser()
+	try:
+		#Read pin and bluetooth settings from ini file
+		config.read('detector.ini')
+		#Maximum level of activation, default is 10
+		maxactivation = int(config.get('GPIO','MaxActivation','10'))
+		#List of on/off output pins, default is 14 & 15
+		outpins = [int(x) for x in config.get('GPIO','OutputPins','15 17 18').split()]
+		#PWM pin, default is 21
+		pwmpin = int(config.get('GPIO','PwmPin','14'))
+		onstates = [int(x) for x in config.get('GPIO','OnStates','1 1 1').split()]
+		GPIO.setmode(GPIO.BCM)
+		if outpins:
+			GPIO.setup(outpins,GPIO.OUT,initial=GPIO.LOW)
+		if pwmpin:
+			GPIO.setup(pwmpin,GPIO.OUT,initial=GPIO.LOW)
+			pwm = GPIO.PWM(pwmpin, 1000)
+			pwm.start(0)
+		#Bluetooth MAC and allowed signal strength range
+		target_addr = config.get('Bluetooth','Target')
+		minrssi = int(config.get('Bluetooth','minRSSI'))
+		maxrssi = int(config.get('Bluetooth','maxRSSI'))
+		mode = int(config.get('Settings','Mode'))
+	except:
+		print('Invalid config file. Using defaults')
+	print('Output Pins: '+','.join(map(str,outpins)))
+	print('Pin On States: '+','.join(map(str,onstates)))
+	print('PWN Outut Pin: '+str(pwmpin))
+	print('BT Target Address: '+target_addr)
+	print('Min. RSSI: '+str(minrssi))
+	print('Max. RSSI: '+str(maxrssi))
+	print('Mode: '+str(mode))
+	print('\n\r')
+
 def activate(level): #Activate device
+	global outputs
+	global onstates
+	global maxActivation
+	global minActivation
 	#pull output pins low in increasing order
 	for i in range(0,len(outpins)):
-        if level > i*maxActivation/len(outpins):
-        	GPIO.output(outpins[i],GPIO.LOW)
-        else
-        	GPIO.output(outpins[i],GPIO.HIGH)
-	#Set duty cycle on PWM pin	
+        	if level > i*maxActivation/len(outpins):
+			if onstates[i]==1:
+	        		GPIO.output(outpins[i],GPIO.HIGH)
+			else:
+				GPIO.output(outpins[i],GPIO.LOW)
+        	else:
+        		if onstates[i]==1:
+				GPIO.output(outpins[i],GPIO.LOW)
+			else:
+				GPIO.output(outpins[i],GPIO.HIGH)
+	#Set duty cycle on PWM pin
 	if pwm:
 		pwm.ChangeDutyCycle(level*100/maxActivation);
-        
+
 def bluetooth_rssi(addr): #Get bluetooth signal strength
+
     # Open hci socket
     hci_sock = bt.hci_open_dev()
     hci_fd = hci_sock.fileno()
-
     # Connect to device
-    bt_sock = bluetooth.BluetoothSocket(bluetooth.L2CAP)
+    bt_sock = bluetooth.BluetoothSocket(bt.L2CAP)
     bt_sock.settimeout(10)
     result = bt_sock.connect_ex((addr, 1))	# PSM 1 - Service Discovery
 
@@ -93,44 +127,55 @@ def bluetooth_rssi(addr): #Get bluetooth signal strength
     except:
         return None
 
-		
-def demo(_count=[0]): #Cycle through all activation levels in 1 second increments
-	count[0] += 0.5
-	if count[0] > maxActivation:
-		count[0] = 0
-	return count[0];
-		
+
+def demo(): #Cycle through all activation levels in 2 second increments
+	global count
+	global maxActivation
+	count += 0.5
+	if count > maxActivation:
+		count = 0
+	return count;
+
+
 def flicker(): #Random 2% chance of activating level 1. Random 0.2% chance of activating level 2
 	r = random.randInt(0,500)
 	if  r==500:
 		return 2
-	if r>= 490
+	if  r>= 490:
 		return 1
-	return 0 
-	
-	
+	return 0
+
+
 def distance(): #Increase activation levels based on distance to a bluetooth source
+	global target_addr
+	global maxrsssi
+	global minrssi
 	rssi = bluetooth_rssi(target_addr)
-	if rssi = None:
-                activate(0)
-        else
-                activate(maxActivation*(rssi-minrssi)/(maxrssi-minrssi)
-	
+	print(rssi)
+	if rssi == None:
+                return 0
+        else:
+		rssi=max(rssi,0)
+                return maxActivation*(rssi-minrssi)/(maxrssi-minrssi)
+
+
 def mainloop():
-		while True:
-			try:
-				if mode == 1:
-					activate(flicker())
-				elif mode == 2:
-					activate(distance())
-				else
-					activate(demo())
-				sleep(0.5)
-			except KeyboardInterrupt:
-				break
-		GPIO.cleanup()
+	global mode
+	act = 0
+	while True:
+		try:
+			if mode == 1:
+				act = flicker()
+			elif mode == 2:
+				act = distance()
+			else:
+				act = demo()
+			activate(act)
+			time.sleep(0.5)
+		except KeyboardInterrupt:
+			break
+	GPIO.cleanup()
 
 if __name__ == "__main__":
 	init()
-	mainloop()
-	
+mainloop()
